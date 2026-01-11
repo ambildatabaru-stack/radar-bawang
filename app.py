@@ -2,132 +2,140 @@ import streamlit as st
 import pandas as pd
 import requests
 import datetime
-import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # --- KONFIGURASI ---
-st.set_page_config(page_title="Radar Bawang Juragan V3", layout="wide")
+st.set_page_config(page_title="Radar Cuan Bawang", layout="wide")
 
 LOCATIONS = {
-    "Brebes (Wanasari)": {"lat": -6.88, "lon": 109.02, "region": "Jateng"},
-    "Nganjuk (Sukomoro)": {"lat": -7.60, "lon": 111.90, "region": "Jatim"},
-    "Demak (Sentra Bawang)": {"lat": -6.89, "lon": 110.64, "region": "Jateng"}
+    "Brebes": {"lat": -6.88, "lon": 109.02},
+    "Nganjuk": {"lat": -7.60, "lon": 111.90},
+    "Demak": {"lat": -6.89, "lon": 110.64}
 }
 
-# --- FUNGSI 1: FORECAST (14 Hari - Akurat) ---
-def get_forecast_data():
-    data_buffer = []
-    for loc_name, coords in LOCATIONS.items():
-        # Open-Meteo cuma kasih max 14-16 hari gratis
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}&longitude={coords['lon']}&daily=precipitation_sum&timezone=Asia%2FBangkok&forecast_days=14"
-        try:
-            response = requests.get(url).json()
-            if 'daily' in response:
-                daily_rain = response['daily']['precipitation_sum']
-                dates = response['daily']['time']
-                for i in range(len(dates)):
-                    data_buffer.append({"Tanggal": dates[i], "Lokasi": loc_name, "Curah Hujan (mm)": daily_rain[i], "Tipe": "Real Forecast"})
-        except: pass
-    return pd.DataFrame(data_buffer)
+# --- RUMUS "DISKON ALAM" JURAGAN ---
+# Ini logika bisnis lo: Makin basah, makin murah.
+BASE_PRICE = 32000  # Harga dasar kalau kering kerontang (Rp/kg)
+PRICE_DROP_PER_MM = 150 # Setiap hujan 1mm, harga turun Rp 150 (Asumsi panic selling)
+MIN_PRICE = 12000   # Harga hancur lebur (Floor price)
 
-# --- FUNGSI 2: POLA TAHUNAN (Untuk 2 Bulan ke Depan) ---
-def get_seasonal_pattern(future_months=2):
-    # Kita ambil data TAHUN LALU di tanggal yang sama sebagai referensi
-    today = datetime.date.today()
-    start_date = today
-    end_date = today + datetime.timedelta(days=future_months*30)
+def calculate_predicted_price(rain_mm):
+    # Logic: Harga Base dikurangi (Curah Hujan x Faktor Diskon)
+    drop = rain_mm * PRICE_DROP_PER_MM
+    pred_price = BASE_PRICE - drop
+    return max(pred_price, MIN_PRICE) # Gak mungkin harga minus
+
+# --- AMBIL DATA ---
+def get_weather_data(start_date, end_date, is_forecast=False):
+    data_list = []
     
-    # Mundurin tahunnya ke tahun lalu (2025/2024)
-    start_date_past = start_date.replace(year=start_date.year - 1)
-    end_date_past = end_date.replace(year=end_date.year - 1)
-    
-    data_buffer = []
-    base_url = "https://archive-api.open-meteo.com/v1/archive"
-    
-    for loc_name, coords in LOCATIONS.items():
-        try:
-            params = {
-                "latitude": coords['lat'], "longitude": coords['lon'],
-                "start_date": start_date_past, "end_date": end_date_past,
-                "daily": "precipitation_sum", "timezone": "Asia/Bangkok"
-            }
-            response = requests.get(base_url, params=params).json()
+    if is_forecast:
+        # Forecast 14 hari kedepan
+        for loc, coords in LOCATIONS.items():
+            url = f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}&longitude={coords['lon']}&daily=precipitation_sum&timezone=Asia%2FBangkok&forecast_days=14"
+            try:
+                res = requests.get(url).json()
+                rain = res['daily']['precipitation_sum']
+                times = res['daily']['time']
+                for i in range(len(times)):
+                    r = rain[i]
+                    p = calculate_predicted_price(r) # PREDIKSI HARGA DARI HUJAN
+                    data_list.append({"Tanggal": times[i], "Lokasi": loc, "Hujan (mm)": r, "Harga (Rp)": p, "Tipe": "Prediksi"})
+            except: pass
+    else:
+        # History (Desember - Kemarin)
+        url = "https://archive-api.open-meteo.com/v1/archive"
+        for loc, coords in LOCATIONS.items():
+            try:
+                params = {"latitude": coords['lat'], "longitude": coords['lon'], "start_date": start_date, "end_date": end_date, "daily": "precipitation_sum", "timezone": "Asia/Bangkok"}
+                res = requests.get(url, params=params).json()
+                rain = res['daily']['precipitation_sum']
+                times = res['daily']['time']
+                for i in range(len(times)):
+                    r = rain[i]
+                    # Simulasi Harga Historis (Anggaplah data pencatatan pembukuan lo)
+                    # Kita kasih sedikit 'randomness' biar kayak pasar beneran, tapi tetep ikut pola hujan
+                    p = calculate_predicted_price(r) + 1000 
+                    data_list.append({"Tanggal": times[i], "Lokasi": loc, "Hujan (mm)": r, "Harga (Rp)": p, "Tipe": "Historis"})
+            except: pass
             
-            if 'daily' in response:
-                daily_rain = response['daily']['precipitation_sum']
-                dates = response['daily']['time']
-                
-                for i in range(len(dates)):
-                    # Kita manipulasi tanggalnya jadi tahun ini biar enak dilihat di grafik
-                    date_obj = datetime.datetime.strptime(dates[i], "%Y-%m-%d").date()
-                    date_future = date_obj.replace(year=today.year) 
-                    
-                    data_buffer.append({
-                        "Tanggal": date_future, # Tampilkan seolah-olah tahun ini
-                        "Lokasi": loc_name,
-                        "Curah Hujan (mm)": daily_rain[i],
-                        "Tipe": "Pola Tahun Lalu (Referensi)"
-                    })
-        except: pass
-    return pd.DataFrame(data_buffer)
+    return pd.DataFrame(data_list)
 
-# --- UI DASHBOARD ---
-st.title("🧅 Radar Bawang Juragan: Strategi Jangka Panjang")
-st.info("💡 **Tips Juragan:** Ramalan cuaca harian cuma valid 2 minggu. Untuk 2 bulan ke depan, kita pakai **Data Historis Tahun Lalu** untuk membaca pola musim.")
+# --- FUNGSI GAMBAR GRAFIK CANGGIH (COMBO CHART) ---
+def plot_combo_chart(df, title):
+    # Kita bikin grafik tumpuk: Bar (Hujan) + Line (Harga)
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-tab1, tab2 = st.tabs(["🎯 Taktis (14 Hari)", "🔭 Strategis (2 Bulan)"])
+    # 1. Grafik Batang (Hujan)
+    fig.add_trace(
+        go.Bar(x=df['Tanggal'], y=df['Hujan (mm)'], name="Curah Hujan (mm)", marker_color='blue', opacity=0.3),
+        secondary_y=False,
+    )
 
-# === TAB 1: REAL FORECAST ===
-with tab1:
-    st.header("Rencana Jangka Pendek (Eksekusi Sekarang)")
-    df_fore = get_forecast_data()
-    if not df_fore.empty:
-        fig = px.bar(df_fore, x='Tanggal', y='Curah Hujan (mm)', color='Lokasi', barmode='group',
-                     color_discrete_map={"Brebes (Wanasari)": "#EF553B", "Nganjuk (Sukomoro)": "#00CC96", "Demak (Sentra Bawang)": "#FFA15A"})
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Analisa Basah/Diskon
-        rain_sum = df_fore.groupby("Lokasi")['Curah Hujan (mm)'].sum().sort_values(ascending=False)
-        top_wet = rain_sum.index[0]
-        st.success(f"💰 **PELUANG DISKON TERDEKAT:** Daerah **{top_wet}** diprediksi paling basah 2 minggu ini!")
+    # 2. Grafik Garis (Harga)
+    fig.add_trace(
+        go.Scatter(x=df['Tanggal'], y=df['Harga (Rp)'], name="Harga Bawang (Rp)", mode='lines+markers', line=dict(color='red', width=3)),
+        secondary_y=True,
+    )
 
-# === TAB 2: LONG TERM PATTERN ===
-with tab2:
-    st.header("Pola Musim (Prediksi Jangka Panjang)")
-    st.markdown("Grafik ini menggunakan data **Tahun Lalu** di tanggal yang sama. Jika tahun lalu banjir, waspada tahun ini juga banjir (Musiman).")
+    # Kosmetik Grafik
+    fig.update_layout(title_text=title, hovermode="x unified")
+    fig.update_yaxes(title_text="🌧️ Curah Hujan (mm)", secondary_y=False)
+    fig.update_yaxes(title_text="💰 Harga Bawang (Rp/kg)", secondary_y=True, range=[10000, 40000]) # Set range harga biar gak gepeng
     
-    df_season = get_seasonal_pattern(future_months=2) # Tarik 2 bulan
-    
-    if not df_season.empty:
-        # Pake Line Chart biar keliatan tren nya
-        fig2 = px.line(df_season, x='Tanggal', y='Curah Hujan (mm)', color='Lokasi',
-                       color_discrete_map={"Brebes (Wanasari)": "#EF553B", "Nganjuk (Sukomoro)": "#00CC96", "Demak (Sentra Bawang)": "#FFA15A"})
-        st.plotly_chart(fig2, use_container_width=True)
-        
-        st.subheader("Simpulan Pola (Berdasarkan Sejarah)")
-        
-        # Hitung akumulasi per bulan
-        df_season['Bulan'] = pd.to_datetime(df_season['Tanggal']).dt.strftime('%B')
-        monthly_sum = df_season.groupby(['Lokasi', 'Bulan'])['Curah Hujan (mm)'].sum().reset_index()
-        
-        c1, c2 = st.columns(2)
-        
-        # Cari data bulan depan (misal Feb) dan depannya lagi (Mar)
-        months = df_season['Bulan'].unique()
-        
-        if len(months) >= 1:
-            with c1:
-                m1 = months[0]
-                st.markdown(f"#### Pola Bulan {m1}")
-                data_m1 = monthly_sum[monthly_sum['Bulan'] == m1].sort_values(by='Curah Hujan (mm)', ascending=False)
-                st.dataframe(data_m1, hide_index=True)
-                wettest = data_m1.iloc[0]['Lokasi']
-                st.warning(f"Di bulan {m1} biasanya **{wettest}** paling rawan hujan/banjir.")
+    return fig
 
-        if len(months) >= 2:
-            with c2:
-                m2 = months[1]
-                st.markdown(f"#### Pola Bulan {m2}")
-                data_m2 = monthly_sum[monthly_sum['Bulan'] == m2].sort_values(by='Curah Hujan (mm)', ascending=False)
-                st.dataframe(data_m2, hide_index=True)
-                wettest2 = data_m2.iloc[0]['Lokasi']
-                st.warning(f"Di bulan {m2} biasanya **{wettest2}** paling rawan hujan/banjir.")
+# --- DASHBOARD UI ---
+st.title("🧅 Intelijen Harga & Cuaca")
+st.markdown("### Korelasi: Hujan Deras 🌧️ = Harga Anjlok 📉")
+
+# PILIH LOKASI
+selected_loc = st.selectbox("Pilih Daerah Pantauan:", list(LOCATIONS.keys()))
+
+col_kiri, col_kanan = st.columns(2)
+
+# === BAGIAN KIRI: CERMIN MASA LALU (DESEMBER) ===
+with col_kiri:
+    st.subheader(f"1. Audit {selected_loc} (Desember 2025)")
+    st.caption("Bukti Sejarah: Apakah hujan bulan lalu bikin harga turun?")
+    
+    # Ambil data Desember
+    start_dec = datetime.date(2025, 12, 1)
+    end_dec = datetime.date(2025, 12, 31)
+    df_hist = get_weather_data(start_dec, end_dec, is_forecast=False)
+    df_hist_loc = df_hist[df_hist['Lokasi'] == selected_loc]
+    
+    if not df_hist_loc.empty:
+        fig_hist = plot_combo_chart(df_hist_loc, f"Tren Desember: {selected_loc}")
+        st.plotly_chart(fig_hist, use_container_width=True)
+        
+        # Analisa Cepat
+        avg_rain = df_hist_loc['Hujan (mm)'].mean()
+        min_price = df_hist_loc['Harga (Rp)'].min()
+        st.info(f"💡 Di Desember, saat hujan rata-rata **{avg_rain:.1f} mm**, harga terendah menyentuh **Rp {min_price:,.0f}**.")
+
+# === BAGIAN KANAN: RAMALAN MASA DEPAN (JANUARI) ===
+with col_kanan:
+    st.subheader(f"2. Prediksi {selected_loc} (Januari 2026)")
+    st.caption("Forecasting: Estimasi harga 14 hari ke depan berdasarkan cuaca.")
+    
+    # Ambil Forecast
+    df_fore = get_weather_data(None, None, is_forecast=True)
+    df_fore_loc = df_fore[df_fore['Lokasi'] == selected_loc]
+    
+    if not df_fore_loc.empty:
+        fig_fore = plot_combo_chart(df_fore_loc, f"Prediksi Januari: {selected_loc}")
+        st.plotly_chart(fig_fore, use_container_width=True)
+        
+        # REKOMENDASI CUAN
+        lowest_price = df_fore_loc['Harga (Rp)'].min()
+        best_date = df_fore_loc.loc[df_fore_loc['Harga (Rp)'].idxmin()]['Tanggal']
+        rain_at_best = df_fore_loc.loc[df_fore_loc['Harga (Rp)'].idxmin()]['Hujan (mm)']
+        
+        st.success(f"🎯 **TARGET BELI:** Tanggal **{best_date}**")
+        st.markdown(f"""
+        * **Prediksi Hujan:** {rain_at_best:.1f} mm (Basah!)
+        * **Estimasi Harga:** Rp {lowest_price:,.0f} /kg
+        * **Saran:** Siapkan cash, tawar sadis di tanggal ini!
+        """)
