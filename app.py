@@ -127,32 +127,62 @@ with tab1:
                     st.warning("Data tidak ditemukan atau error koneksi.")
 
 # === TAB 2: FORECAST (Masa Depan) ===
+# === TAB 2: RADAR DISKON (Forecast Cuaca) ===
 with tab2:
-    st.header("Prediksi 14 Hari Kedepan (Masuk Februari)")
-    st.caption("Data ini adalah ramalan cuaca. Semakin jauh tanggalnya, akurasi makin turun.")
+    st.header("🎯 Radar 'Panic Selling' (14 Hari Kedepan)")
+    st.caption("Cari daerah dengan curah hujan TINGGI. Petani susah jemur = Harga bisa ditekan.")
     
     df_forecast = get_forecast_data()
     
     if not df_forecast.empty:
+        # Tampilkan Grafik
         fig_fore = px.bar(df_forecast, x='Tanggal', y='Curah Hujan (mm)', color='Lokasi', barmode='group',
-                          color_discrete_map={"Brebes (Wanasari)": "#EF553B", "Nganjuk (Sukomoro)": "#00CC96"})
+                          color_discrete_map={
+                              "Brebes (Wanasari)": "#EF553B", # Merah
+                              "Nganjuk (Sukomoro)": "#00CC96", # Hijau
+                              "Demak (Sentra Bawang)": "#FFA15A" # Orange
+                          })
         st.plotly_chart(fig_fore, use_container_width=True)
         
-        # Analisa Cepat
-        st.subheader("🤖 Analisa Juragan")
-        future_rain_brebes = df_forecast[df_forecast['Lokasi'].str.contains("Brebes")]['Curah Hujan (mm)'].sum()
-        future_rain_nganjuk = df_forecast[df_forecast['Lokasi'].str.contains("Nganjuk")]['Curah Hujan (mm)'].sum()
+        # --- LOGIKA BARU: HUJAN = DISKON ---
+        st.subheader("🤑 Analisa Potensi Harga Murah")
         
-        col_res1, col_res2 = st.columns(2)
-        with col_res1:
-            st.metric("Potensi Hujan Brebes (2 Minggu)", f"{future_rain_brebes:.1f} mm")
-        with col_res2:
-            st.metric("Potensi Hujan Nganjuk (2 Minggu)", f"{future_rain_nganjuk:.1f} mm")
+        # Hitung Total Hujan per Daerah
+        summary = df_forecast.groupby("Lokasi")['Curah Hujan (mm)'].sum().reset_index()
+        summary = summary.sort_values(by='Curah Hujan (mm)', ascending=False) # Yang paling basah di atas
+        
+        # Kolom Layout
+        col1, col2, col3 = st.columns(3)
+        
+        # Loop untuk menampilkan Score Card tiap daerah
+        cols = [col1, col2, col3]
+        for index, row in summary.iterrows():
+            loc = row['Lokasi']
+            rain_total = row['Curah Hujan (mm)']
+            col_obj = cols[index % 3] # Biar rapi ke samping
             
-        if future_rain_brebes < 50 and future_rain_nganjuk > 100:
-            st.success("🎯 **Target Operasi:** BREBES! Cuaca di sana diprediksi lebih kering.")
-        elif future_rain_nganjuk < 50 and future_rain_brebes > 100:
-            st.success("🎯 **Target Operasi:** NGANJUK! Cuaca di sana diprediksi lebih kering.")
-        else:
-            st.info("⚖️ Cuaca relatif sama. Mainkan harga!")
+            with col_obj:
+                st.markdown(f"#### {loc}")
+                st.metric("Total Hujan (2 Minggu)", f"{rain_total:.0f} mm")
+                
+                # Logic Juragan Bawang Goreng:
+                if rain_total > 150:
+                    st.success("💰 **PELUANG EMAS!** (Basah Kuyup)")
+                    st.markdown("""
+                    * **Prediksi:** Petani panik, gak bisa jemur.
+                    * **Aksi:** Tawar sadis! Ambil barang basah, langsung goreng.
+                    """)
+                elif rain_total > 80:
+                    st.info("📉 **Potensi Turun** (Basah Sedang)")
+                    st.markdown("""
+                    * **Prediksi:** Penjemuran terganggu.
+                    * **Aksi:** Coba goyang harga sedikit di bawah pasar.
+                    """)
+                else:
+                    st.error("🔥 **Barang Kering** (Harga Keras)")
+                    st.markdown("""
+                    * **Prediksi:** Cuaca panas, petani santai nyimpen barang.
+                    * **Aksi:** Skip dulu, cari daerah lain yg hujan.
+                    """)
+
 
