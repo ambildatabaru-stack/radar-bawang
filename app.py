@@ -8,9 +8,11 @@ import plotly.express as px
 st.set_page_config(page_title="Radar Bawang Juragan V2", layout="wide")
 
 # --- DATABASE LOKASI ---
+# --- DATABASE LOKASI ---
 LOCATIONS = {
     "Brebes (Wanasari)": {"lat": -6.88, "lon": 109.02, "region": "Jateng"},
-    "Nganjuk (Sukomoro)": {"lat": -7.60, "lon": 111.90, "region": "Jatim"}
+    "Nganjuk (Sukomoro)": {"lat": -7.60, "lon": 111.90, "region": "Jatim"},
+    "Demak (Sentra Bawang)": {"lat": -6.89, "lon": 110.64, "region": "Jateng"} 
 }
 
 # --- FUNGSI 1: TARIK DATA HISTORIS (Masa Lalu) ---
@@ -153,3 +155,4 @@ with tab2:
             st.success("🎯 **Target Operasi:** NGANJUK! Cuaca di sana diprediksi lebih kering.")
         else:
             st.info("⚖️ Cuaca relatif sama. Mainkan harga!")
+
