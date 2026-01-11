@@ -4,32 +4,51 @@ import requests
 import datetime
 import plotly.express as px
 
-# --- KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Radar Bawang Juragan V2", layout="wide")
+# --- KONFIGURASI ---
+st.set_page_config(page_title="Radar Bawang Juragan V3", layout="wide")
 
-# --- DATABASE LOKASI ---
-# --- DATABASE LOKASI ---
 LOCATIONS = {
     "Brebes (Wanasari)": {"lat": -6.88, "lon": 109.02, "region": "Jateng"},
     "Nganjuk (Sukomoro)": {"lat": -7.60, "lon": 111.90, "region": "Jatim"},
-    "Demak (Sentra Bawang)": {"lat": -6.89, "lon": 110.64, "region": "Jateng"} 
+    "Demak (Sentra Bawang)": {"lat": -6.89, "lon": 110.64, "region": "Jateng"}
 }
 
-# --- FUNGSI 1: TARIK DATA HISTORIS (Masa Lalu) ---
-def get_historical_data(start_date, end_date):
+# --- FUNGSI 1: FORECAST (14 Hari - Akurat) ---
+def get_forecast_data():
     data_buffer = []
-    # API Archive Open-Meteo (Khusus Data Lampau)
+    for loc_name, coords in LOCATIONS.items():
+        # Open-Meteo cuma kasih max 14-16 hari gratis
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}&longitude={coords['lon']}&daily=precipitation_sum&timezone=Asia%2FBangkok&forecast_days=14"
+        try:
+            response = requests.get(url).json()
+            if 'daily' in response:
+                daily_rain = response['daily']['precipitation_sum']
+                dates = response['daily']['time']
+                for i in range(len(dates)):
+                    data_buffer.append({"Tanggal": dates[i], "Lokasi": loc_name, "Curah Hujan (mm)": daily_rain[i], "Tipe": "Real Forecast"})
+        except: pass
+    return pd.DataFrame(data_buffer)
+
+# --- FUNGSI 2: POLA TAHUNAN (Untuk 2 Bulan ke Depan) ---
+def get_seasonal_pattern(future_months=2):
+    # Kita ambil data TAHUN LALU di tanggal yang sama sebagai referensi
+    today = datetime.date.today()
+    start_date = today
+    end_date = today + datetime.timedelta(days=future_months*30)
+    
+    # Mundurin tahunnya ke tahun lalu (2025/2024)
+    start_date_past = start_date.replace(year=start_date.year - 1)
+    end_date_past = end_date.replace(year=end_date.year - 1)
+    
+    data_buffer = []
     base_url = "https://archive-api.open-meteo.com/v1/archive"
     
     for loc_name, coords in LOCATIONS.items():
         try:
             params = {
-                "latitude": coords['lat'],
-                "longitude": coords['lon'],
-                "start_date": start_date,
-                "end_date": end_date,
-                "daily": "precipitation_sum",
-                "timezone": "Asia/Bangkok"
+                "latitude": coords['lat'], "longitude": coords['lon'],
+                "start_date": start_date_past, "end_date": end_date_past,
+                "daily": "precipitation_sum", "timezone": "Asia/Bangkok"
             }
             response = requests.get(base_url, params=params).json()
             
@@ -38,151 +57,77 @@ def get_historical_data(start_date, end_date):
                 dates = response['daily']['time']
                 
                 for i in range(len(dates)):
-                    # Logic: Hujan > 20mm sehari itu udah bikin tanah becek parah
-                    status = "Kering"
-                    if daily_rain[i] > 50: status = "BANJIR/EXTREME"
-                    elif daily_rain[i] > 10: status = "Hujan"
+                    # Kita manipulasi tanggalnya jadi tahun ini biar enak dilihat di grafik
+                    date_obj = datetime.datetime.strptime(dates[i], "%Y-%m-%d").date()
+                    date_future = date_obj.replace(year=today.year) 
                     
                     data_buffer.append({
-                        "Tanggal": dates[i],
+                        "Tanggal": date_future, # Tampilkan seolah-olah tahun ini
                         "Lokasi": loc_name,
                         "Curah Hujan (mm)": daily_rain[i],
-                        "Status": status
+                        "Tipe": "Pola Tahun Lalu (Referensi)"
                     })
-        except Exception as e:
-            st.error(f"Gagal tarik history {loc_name}: {e}")
-            
-    return pd.DataFrame(data_buffer)
-
-# --- FUNGSI 2: TARIK DATA FORECAST (Masa Depan) ---
-def get_forecast_data():
-    data_buffer = []
-    for loc_name, coords in LOCATIONS.items():
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={coords['lat']}&longitude={coords['lon']}&daily=precipitation_sum&timezone=Asia%2FBangkok&forecast_days=14"
-        try:
-            response = requests.get(url).json()
-            daily_rain = response['daily']['precipitation_sum']
-            dates = response['daily']['time']
-            
-            for i in range(len(dates)):
-                data_buffer.append({
-                    "Tanggal": dates[i],
-                    "Lokasi": loc_name,
-                    "Curah Hujan (mm)": daily_rain[i]
-                })
-        except Exception as e:
-            pass # Silent error biar gak ngerusak tampilan
+        except: pass
     return pd.DataFrame(data_buffer)
 
 # --- UI DASHBOARD ---
-st.title("🧅 Intelijen Bawang Merah: Nganjuk vs Brebes")
-st.write(f"Tanggal Hari Ini: {datetime.date.today()}")
+st.title("🧅 Radar Bawang Juragan: Strategi Jangka Panjang")
+st.info("💡 **Tips Juragan:** Ramalan cuaca harian cuma valid 2 minggu. Untuk 2 bulan ke depan, kita pakai **Data Historis Tahun Lalu** untuk membaca pola musim.")
 
-# Bikin 2 Tab: Masa Lalu & Masa Depan
-tab1, tab2 = st.tabs(["📜 Audit Masa Lalu (Des-Jan)", "🔭 Radar Masa Depan (Feb/Forecast)"])
+tab1, tab2 = st.tabs(["🎯 Taktis (14 Hari)", "🔭 Strategis (2 Bulan)"])
 
-# === TAB 1: AUDIT DATA (Masa Lalu) ===
+# === TAB 1: REAL FORECAST ===
 with tab1:
-    st.header("Cek Fakta Lapangan (Desember - Kemarin)")
-    st.info("Gunakan ini untuk memvalidasi alasan supplier. Apakah benar kemarin banjir?")
-    
-    # Input Rentang Tanggal
-    col_date1, col_date2 = st.columns(2)
-    with col_date1:
-        start_d = st.date_input("Mulai Tanggal", datetime.date(2025, 12, 1))
-    with col_date2:
-        end_d = st.date_input("Sampai Tanggal", datetime.date.today() - datetime.timedelta(days=2)) # Data history biasanya delay 2 hari
-    
-    if st.button("Tarik Data History"):
-        if start_d > end_d:
-            st.error("Tanggal mulai gak boleh lebih besar dari tanggal akhir, Gan!")
-        else:
-            with st.spinner("Sedang mengaudit data satelit..."):
-                df_hist = get_historical_data(start_d, end_d)
-                
-                if not df_hist.empty:
-                    # 1. Total Curah Hujan (Siapa paling basah?)
-                    total_rain = df_hist.groupby("Lokasi")["Curah Hujan (mm)"].sum().reset_index()
-                    
-                    c1, c2 = st.columns([1, 2])
-                    with c1:
-                        st.subheader("Total Hujan (Akumulasi)")
-                        st.dataframe(total_rain)
-                        brebes_rain = total_rain[total_rain['Lokasi'].str.contains("Brebes")]['Curah Hujan (mm)'].sum()
-                        nganjuk_rain = total_rain[total_rain['Lokasi'].str.contains("Nganjuk")]['Curah Hujan (mm)'].sum()
-                        
-                        if brebes_rain > nganjuk_rain:
-                            st.warning("⚠️ **Brebes Lebih Basah** di periode ini. Hati-hati barang lembab.")
-                        else:
-                            st.warning("⚠️ **Nganjuk Lebih Basah** di periode ini.")
+    st.header("Rencana Jangka Pendek (Eksekusi Sekarang)")
+    df_fore = get_forecast_data()
+    if not df_fore.empty:
+        fig = px.bar(df_fore, x='Tanggal', y='Curah Hujan (mm)', color='Lokasi', barmode='group',
+                     color_discrete_map={"Brebes (Wanasari)": "#EF553B", "Nganjuk (Sukomoro)": "#00CC96", "Demak (Sentra Bawang)": "#FFA15A"})
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Analisa Basah/Diskon
+        rain_sum = df_fore.groupby("Lokasi")['Curah Hujan (mm)'].sum().sort_values(ascending=False)
+        top_wet = rain_sum.index[0]
+        st.success(f"💰 **PELUANG DISKON TERDEKAT:** Daerah **{top_wet}** diprediksi paling basah 2 minggu ini!")
 
-                    with c2:
-                        st.subheader("Grafik Tren Hujan Harian")
-                        fig_hist = px.line(df_hist, x='Tanggal', y='Curah Hujan (mm)', color='Lokasi', markers=True,
-                                           color_discrete_map={"Brebes (Wanasari)": "#EF553B", "Nganjuk (Sukomoro)": "#00CC96"})
-                        # Kasih garis batas bahaya
-                        fig_hist.add_hline(y=20, line_dash="dash", line_color="red", annotation_text="Batas Bahaya (20mm)")
-                        st.plotly_chart(fig_hist, use_container_width=True)
-                else:
-                    st.warning("Data tidak ditemukan atau error koneksi.")
-
-# === TAB 2: FORECAST (Masa Depan) ===
-# === TAB 2: RADAR DISKON (Forecast Cuaca) ===
+# === TAB 2: LONG TERM PATTERN ===
 with tab2:
-    st.header("🎯 Radar 'Panic Selling' (14 Hari Kedepan)")
-    st.caption("Cari daerah dengan curah hujan TINGGI. Petani susah jemur = Harga bisa ditekan.")
+    st.header("Pola Musim (Prediksi Jangka Panjang)")
+    st.markdown("Grafik ini menggunakan data **Tahun Lalu** di tanggal yang sama. Jika tahun lalu banjir, waspada tahun ini juga banjir (Musiman).")
     
-    df_forecast = get_forecast_data()
+    df_season = get_seasonal_pattern(future_months=2) # Tarik 2 bulan
     
-    if not df_forecast.empty:
-        # Tampilkan Grafik
-        fig_fore = px.bar(df_forecast, x='Tanggal', y='Curah Hujan (mm)', color='Lokasi', barmode='group',
-                          color_discrete_map={
-                              "Brebes (Wanasari)": "#EF553B", # Merah
-                              "Nganjuk (Sukomoro)": "#00CC96", # Hijau
-                              "Demak (Sentra Bawang)": "#FFA15A" # Orange
-                          })
-        st.plotly_chart(fig_fore, use_container_width=True)
+    if not df_season.empty:
+        # Pake Line Chart biar keliatan tren nya
+        fig2 = px.line(df_season, x='Tanggal', y='Curah Hujan (mm)', color='Lokasi',
+                       color_discrete_map={"Brebes (Wanasari)": "#EF553B", "Nganjuk (Sukomoro)": "#00CC96", "Demak (Sentra Bawang)": "#FFA15A"})
+        st.plotly_chart(fig2, use_container_width=True)
         
-        # --- LOGIKA BARU: HUJAN = DISKON ---
-        st.subheader("🤑 Analisa Potensi Harga Murah")
+        st.subheader("Simpulan Pola (Berdasarkan Sejarah)")
         
-        # Hitung Total Hujan per Daerah
-        summary = df_forecast.groupby("Lokasi")['Curah Hujan (mm)'].sum().reset_index()
-        summary = summary.sort_values(by='Curah Hujan (mm)', ascending=False) # Yang paling basah di atas
+        # Hitung akumulasi per bulan
+        df_season['Bulan'] = pd.to_datetime(df_season['Tanggal']).dt.strftime('%B')
+        monthly_sum = df_season.groupby(['Lokasi', 'Bulan'])['Curah Hujan (mm)'].sum().reset_index()
         
-        # Kolom Layout
-        col1, col2, col3 = st.columns(3)
+        c1, c2 = st.columns(2)
         
-        # Loop untuk menampilkan Score Card tiap daerah
-        cols = [col1, col2, col3]
-        for index, row in summary.iterrows():
-            loc = row['Lokasi']
-            rain_total = row['Curah Hujan (mm)']
-            col_obj = cols[index % 3] # Biar rapi ke samping
-            
-            with col_obj:
-                st.markdown(f"#### {loc}")
-                st.metric("Total Hujan (2 Minggu)", f"{rain_total:.0f} mm")
-                
-                # Logic Juragan Bawang Goreng:
-                if rain_total > 150:
-                    st.success("💰 **PELUANG EMAS!** (Basah Kuyup)")
-                    st.markdown("""
-                    * **Prediksi:** Petani panik, gak bisa jemur.
-                    * **Aksi:** Tawar sadis! Ambil barang basah, langsung goreng.
-                    """)
-                elif rain_total > 80:
-                    st.info("📉 **Potensi Turun** (Basah Sedang)")
-                    st.markdown("""
-                    * **Prediksi:** Penjemuran terganggu.
-                    * **Aksi:** Coba goyang harga sedikit di bawah pasar.
-                    """)
-                else:
-                    st.error("🔥 **Barang Kering** (Harga Keras)")
-                    st.markdown("""
-                    * **Prediksi:** Cuaca panas, petani santai nyimpen barang.
-                    * **Aksi:** Skip dulu, cari daerah lain yg hujan.
-                    """)
+        # Cari data bulan depan (misal Feb) dan depannya lagi (Mar)
+        months = df_season['Bulan'].unique()
+        
+        if len(months) >= 1:
+            with c1:
+                m1 = months[0]
+                st.markdown(f"#### Pola Bulan {m1}")
+                data_m1 = monthly_sum[monthly_sum['Bulan'] == m1].sort_values(by='Curah Hujan (mm)', ascending=False)
+                st.dataframe(data_m1, hide_index=True)
+                wettest = data_m1.iloc[0]['Lokasi']
+                st.warning(f"Di bulan {m1} biasanya **{wettest}** paling rawan hujan/banjir.")
 
-
+        if len(months) >= 2:
+            with c2:
+                m2 = months[1]
+                st.markdown(f"#### Pola Bulan {m2}")
+                data_m2 = monthly_sum[monthly_sum['Bulan'] == m2].sort_values(by='Curah Hujan (mm)', ascending=False)
+                st.dataframe(data_m2, hide_index=True)
+                wettest2 = data_m2.iloc[0]['Lokasi']
+                st.warning(f"Di bulan {m2} biasanya **{wettest2}** paling rawan hujan/banjir.")
